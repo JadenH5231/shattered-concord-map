@@ -12,6 +12,7 @@
     routes: 0,         // roads + rivers
     townLabel: 0,      // non-capital town names
     terrain: 0,        // terrain texture (chevrons/trees/dots)
+    front: -0.75,      // the front line
     regionDetail: 1.5, // trails, passes, dunes, craters
     townDetail: 3,     // streets + buildings
     landmark: 3.6      // landmark name labels
@@ -71,6 +72,7 @@
   function padBounds(b, p) { return [[b[0][0] - p, b[0][1] - p], [b[1][0] + p, b[1][1] + p]]; }
   function bbox(poly) { let minY = 1e9, maxY = -1e9, minX = 1e9, maxX = -1e9; poly.forEach(p => { minY = Math.min(minY, p[0]); maxY = Math.max(maxY, p[0]); minX = Math.min(minX, p[1]); maxX = Math.max(maxX, p[1]); }); return { minX, minY, w: maxX - minX, h: maxY - minY }; }
   function pip(pt, poly) { let inside = false, y = pt[0], x = pt[1]; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const yi = poly[i][0], xi = poly[i][1], yj = poly[j][0], xj = poly[j][1]; const hit = (yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi; if (hit) inside = !inside; } return inside; }
+  function dist(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1]); }
   function mulberry32(a) { return function () { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
   function hash(str) { let h = 7; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0; return Math.abs(h); }
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
@@ -85,6 +87,11 @@
     maxBounds: padBounds(WORLD.bounds, 240), maxBoundsViscosity: 0.7,
     renderer: canvasR
   });
+  // Add the shared renderer to the map explicitly and first, so it's fully
+  // initialized (bounds set) before any layer that uses it tries to render.
+  // Leaving this implicit (relying on whichever path happens to touch
+  // getRenderer() first) is what caused every path to crash on first paint.
+  canvasR.addTo(map);
   map.createPane("gridPane");
   map.getPane("gridPane").style.zIndex = 450;
   map.getPane("gridPane").style.pointerEvents = "none";
@@ -92,6 +99,26 @@
 
   const LL = (p) => L.latLng(p[0], p[1]);
   const LLs = (a) => a.map(LL);
+
+  // Give the map its initial view now, before any other layer is built or
+  // any zoom listener is bound. fitBounds() triggers Leaflet's first-ever
+  // "load" event synchronously, which is also when a freshly-added shared
+  // renderer like canvasR actually finishes initializing (gets its pixel
+  // bounds). If that first view change happens later, after a "zoomend"
+  // listener is already wired to rebuild every layer, the listener fires
+  // mid-load (before the renderer is ready) and every path throws on its
+  // first paint. Doing it here, before anything else exists to listen for
+  // it, sidesteps the race entirely.
+  map.fitBounds(L.latLngBounds(LLs(WORLD.coastline)), { padding: [30, 30] });
+  // The "whole continent" fit can land below zoom 0 on most screens — when
+  // it does, pull the ambient LOD thresholds down with it so roads, rivers,
+  // and terrain texture are visible on first load instead of only after
+  // the player zooms in by hand.
+  const fitZ = map.getZoom();
+  Z.routes = Math.min(Z.routes, fitZ);
+  Z.terrain = Math.min(Z.terrain, fitZ);
+  Z.townLabel = Math.min(Z.townLabel, fitZ);
+  Z.front = Math.min(Z.front, fitZ);
 
   // background sea fills the padded world
   const seaBox = padBounds(WORLD.bounds, 240);
@@ -115,39 +142,152 @@
   L.polyline(LLs(spine), Object.assign({ interactive: false, renderer: canvasR }, STYLE.border)).addTo(G.nations);
   L.polygon(LLs(WORLD.bay), Object.assign({ interactive: false, renderer: canvasR }, STYLE.bay)).addTo(G.land);
 
+  // ---- coastal hachures: short ticks along the shore, pointing seaward --
+  function addCoastalHachures() {
+    const r = mulberry32(hash("coast") + 3);
+    const pts = WORLD.coastline;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const len = dist(a, b);
+      if (len < 4) continue;
+      const d1 = (b[0] - a[0]) / len, d2 = (b[1] - a[1]) / len;
+      let n1 = -d2, n2 = d1;
+      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      if (pip([mid[0] + n1 * 3, mid[1] + n2 * 3], WORLD.coastline)) { n1 = -n1; n2 = -n2; }
+      const steps = Math.max(1, Math.round(len / 14));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const p0 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        const tickLen = 2.6 + r() * 2.4;
+        const p1 = [p0[0] + n1 * tickLen, p0[1] + n2 * tickLen];
+        L.polyline(LLs([p0, p1]), { interactive: false, renderer: canvasR, color: "#5a4226", weight: 0.8, opacity: 0.38 }).addTo(G.land);
+      }
+    }
+  }
+  addCoastalHachures();
+
+  // ---- sea texture: gentle scattered wave glyphs across the open water --
+  function addSeaTexture() {
+    const r = mulberry32(hash("sea") + 7);
+    const seaB = padBounds(WORLD.bounds, 200);
+    const bb = { minY: seaB[0][0], minX: seaB[0][1], h: seaB[1][0] - seaB[0][0], w: seaB[1][1] - seaB[0][1] };
+    let placed = 0, tries = 0;
+    while (placed < 150 && tries < 3000) {
+      tries++;
+      const p = [bb.minY + r() * bb.h, bb.minX + r() * bb.w];
+      if (pip(p, WORLD.coastline)) continue;
+      placed++;
+      const len = 14 + r() * 16, ang = r() * Math.PI * 2, bow = 3 + r() * 3;
+      const d1 = Math.sin(ang), d2 = Math.cos(ang), n1 = -d2, n2 = d1;
+      const p0 = [p[0] - d1 * len / 2, p[1] - d2 * len / 2];
+      const p2 = [p[0] + d1 * len / 2, p[1] + d2 * len / 2];
+      const pm = [p[0] + n1 * bow, p[1] + n2 * bow];
+      L.polyline(LLs([p0, pm, p2]), { interactive: false, renderer: canvasR, color: "#7f97a0", weight: 1, opacity: 0.35, fill: false }).addTo(G.land);
+    }
+  }
+  addSeaTexture();
+
   // ---- regions ----------------------------------------------------------
   WORLD.regions.forEach(rg => {
     L.polygon(LLs(rg.polygon), Object.assign({ interactive: false, renderer: canvasR }, STYLE["rgn_" + rg.kind])).addTo(G.regions);
   });
 
-  // ---- terrain texture + region detail (seeded) ------------------------
+  // ---- terrain glyphs (seeded) -------------------------------------------
+  function treeGlyph(p, r, big) {
+    const s = (big ? 4.5 : 3) + r() * 3;
+    const tone = r() > 0.5 ? "#6f8a4f" : "#7c9a5a";
+    L.polygon(LLs([[p[0] + s, p[1]], [p[0] - s * 0.7, p[1] - s * 0.62], [p[0] - s * 0.7, p[1] + s * 0.62]]),
+      { interactive: false, renderer: canvasR, color: "#445c30", weight: 0.5, fill: true, fillColor: tone, fillOpacity: 0.75 }).addTo(G.terrain);
+    if (big) {
+      const s2 = s * 0.62, oy = s * 0.55, ox = s * 0.3;
+      L.polygon(LLs([[p[0] + s2 + oy, p[1] + ox], [p[0] - s2 * 0.5 + oy, p[1] - s2 * 0.5 + ox], [p[0] - s2 * 0.5 + oy, p[1] + s2 * 0.5 + ox]]),
+        { interactive: false, renderer: canvasR, color: "#445c30", weight: 0.5, fill: true, fillColor: tone, fillOpacity: 0.7 }).addTo(G.terrain);
+    }
+  }
+  function mountainGlyph(p, r) {
+    const s = 6 + r() * 7;
+    const lean = (r() - 0.5) * s * 0.3;
+    const peak = [p[0] + s, p[1] + lean];
+    const base = [[p[0] - s * 0.55, p[1] - s * 0.95], peak, [p[0] - s * 0.55, p[1] + s * 0.95]];
+    L.polygon(LLs(base), { interactive: false, renderer: canvasR, color: "#5a4226", weight: 0.7, fill: true, fillColor: "#a99873", fillOpacity: 0.55 }).addTo(G.terrain);
+    L.polygon(LLs([peak, [p[0] - s * 0.55, p[1] + s * 0.95], [p[0] - s * 0.1, p[1] + s * 0.3]]),
+      { interactive: false, renderer: canvasR, stroke: false, fill: true, fillColor: "#6b5236", fillOpacity: 0.35 }).addTo(G.terrain);
+    if (r() > 0.55) {
+      const cs = s * 0.32;
+      L.polygon(LLs([peak, [peak[0] - cs * 0.85, peak[1] - cs * 0.5], [peak[0] - cs * 0.85, peak[1] + cs * 0.5]]),
+        { interactive: false, renderer: canvasR, stroke: false, fill: true, fillColor: "#eee6d2", fillOpacity: 0.8 }).addTo(G.terrain);
+    }
+  }
+  function crackGlyph(p, r) {
+    const a = r() * Math.PI, s = 2 + r() * 3;
+    L.polyline(LLs([[p[0] - Math.sin(a) * s, p[1] - Math.cos(a) * s], [p[0] + Math.sin(a) * s, p[1] + Math.cos(a) * s]]),
+      { interactive: false, renderer: canvasR, color: "#8a7350", weight: 0.8, opacity: 0.55 }).addTo(G.terrain);
+  }
+  function graveGlyph(p, r) {
+    const s = 1.6 + r() * 1.4;
+    L.polyline(LLs([[p[0] - s, p[1] - s], [p[0] + s, p[1] + s]]), { interactive: false, renderer: canvasR, color: "#6a4a3a", weight: 0.8, opacity: 0.5 }).addTo(G.terrain);
+    L.polyline(LLs([[p[0] - s, p[1] + s], [p[0] + s, p[1] - s]]), { interactive: false, renderer: canvasR, color: "#6a4a3a", weight: 0.8, opacity: 0.5 }).addTo(G.terrain);
+  }
+  function hillTick(p, r) {
+    const ang = r() * Math.PI * 2, s = 3.5 + r() * 3.5;
+    const d1 = Math.sin(ang), d2 = Math.cos(ang), n1 = -d2, n2 = d1;
+    const p0 = [p[0] - d1 * s, p[1] - d2 * s];
+    const p2 = [p[0] + d1 * s, p[1] + d2 * s];
+    const p1 = [p[0] + n1 * s * 0.45, p[1] + n2 * s * 0.45];
+    L.polyline(LLs([p0, p1, p2]), { interactive: false, renderer: canvasR, color: "#8a7350", weight: 0.8, opacity: 0.42, fill: false }).addTo(G.terrain);
+  }
+  function grassTuft(p, r) {
+    const base = r() * Math.PI * 2;
+    for (let k = -1; k <= 1; k++) {
+      const a = base + k * 0.35, s = 1.3 + r() * 1.3;
+      L.polyline(LLs([p, [p[0] + Math.sin(a) * s, p[1] + Math.cos(a) * s]]),
+        { interactive: false, renderer: canvasR, color: "#7c9a5a", weight: 0.7, opacity: 0.45 }).addTo(G.terrain);
+    }
+  }
+
+  // ---- region terrain texture + region detail (seeded) ------------------
   WORLD.regions.forEach(rg => addTerrain(rg));
   function addTerrain(rg) {
     const r = mulberry32(hash(rg.id) + 5);
     const bb = bbox(rg.polygon);
-    const n = rg.kind === "warland" ? 60 : 90;
+    const n = { mountains: 170, forest: 260, desert: 140, warland: 150 }[rg.kind] || 90;
     for (let i = 0; i < n; i++) {
       const p = [bb.minY + r() * bb.h, bb.minX + r() * bb.w];
       if (!pip(p, rg.polygon)) continue;
-      if (rg.kind === "mountains") {
-        const s = 5 + r() * 5;
-        L.polyline(LLs([[p[0] - s * 0.5, p[1] - s], [p[0] + s * 0.5, p[1]], [p[0] - s * 0.5, p[1] + s]]),
-          { interactive: false, renderer: canvasR, color: "#6b5236", weight: 1, opacity: 0.65, fill: false }).addTo(G.terrain);
-      } else if (rg.kind === "forest") {
-        const s = 3 + r() * 3;
-        L.polygon(LLs([[p[0] + s, p[1]], [p[0] - s * 0.7, p[1] - s * 0.7], [p[0] - s * 0.7, p[1] + s * 0.7]]),
-          { interactive: false, renderer: canvasR, color: "#4f6b39", weight: 0.5, fill: true, fillColor: "#6f8a4f", fillOpacity: 0.7 }).addTo(G.terrain);
-      } else if (rg.kind === "desert") {
-        L.circleMarker(LL(p), { interactive: false, renderer: canvasR, radius: 0.9, color: "#b89a5f", fillColor: "#b89a5f", fillOpacity: 0.7, weight: 0 }).addTo(G.terrain);
-      } else if (rg.kind === "warland") {
-        L.circleMarker(LL(p), { interactive: false, renderer: canvasR, radius: 1.1, color: "#7a6a52", fillColor: "#9a8a6f", fillOpacity: 0.5, weight: 0 }).addTo(G.terrain);
-      }
+      if (rg.kind === "mountains") mountainGlyph(p, r);
+      else if (rg.kind === "forest") treeGlyph(p, r, r() > 0.62);
+      else if (rg.kind === "desert") { if (r() > 0.4) L.circleMarker(LL(p), { interactive: false, renderer: canvasR, radius: 0.7 + r() * 0.6, color: "#b89a5f", fillColor: "#b89a5f", fillOpacity: 0.7, weight: 0 }).addTo(G.terrain); else crackGlyph(p, r); }
+      else if (rg.kind === "warland") { if (r() > 0.3) L.circleMarker(LL(p), { interactive: false, renderer: canvasR, radius: 1 + r() * 0.8, color: "#7a6a52", fillColor: "#9a8a6f", fillOpacity: 0.5, weight: 0 }).addTo(G.terrain); else graveGlyph(p, r); }
     }
     drawFeatures(TownGen.generateRegionDetail(rg), G.regionDetail);
   }
 
+  // ---- generic countryside texture: the open land between named regions -
+  function addOpenLandTexture() {
+    const r = mulberry32(hash("openland") + 11);
+    const bb = bbox(WORLD.coastline);
+    const inRegion = (p) => WORLD.regions.some(rg => pip(p, rg.polygon));
+    const nearTown = (p) => WORLD.settlements.some(s => dist(p, s.pos) < s.size * 1.6);
+    let placed = 0, tries = 0;
+    while (placed < 650 && tries < 6000) {
+      tries++;
+      const p = [bb.minY + r() * bb.h, bb.minX + r() * bb.w];
+      if (!pip(p, WORLD.coastline) || inRegion(p) || nearTown(p)) continue;
+      placed++;
+      const roll = r();
+      if (roll < 0.62) hillTick(p, r);
+      else if (roll < 0.86) grassTuft(p, r);
+      else treeGlyph(p, r, false);
+    }
+  }
+  addOpenLandTexture();
+
   // ---- routes + rivers + front -----------------------------------------
-  WORLD.rivers.forEach(rv => { if (rv.points.length > 1) L.polyline(LLs(rv.points), Object.assign({ interactive: false, renderer: canvasR }, STYLE.river)).addTo(G.routes); });
+  WORLD.rivers.forEach(rv => {
+    if (rv.points.length < 2) return;
+    L.polyline(LLs(rv.points), Object.assign({ interactive: false, renderer: canvasR }, STYLE.river)).addTo(G.routes);
+    L.polyline(LLs(rv.points), { interactive: false, renderer: canvasR, color: "#bcd3df", weight: 0.8, opacity: 0.55 }).addTo(G.routes);
+  });
   WORLD.roads.forEach(rd => { L.polyline(LLs(rd.points), Object.assign({ interactive: false, renderer: canvasR }, rd.dashed ? STYLE.smug : STYLE.road)).addTo(G.routes); });
   L.polyline(LLs(WORLD.frontLine), Object.assign({ interactive: false, renderer: canvasR }, STYLE.front)).addTo(G.front);
 
@@ -308,7 +448,7 @@
     want(G.terrain, ui.terrain && z >= Z.terrain);
     want(G.regionDetail, ui.terrain && z >= Z.regionDetail);
     want(G.routes, ui.routes && z >= Z.routes);
-    want(G.front, ui.front && z >= -0.75);
+    want(G.front, ui.front && z >= Z.front);
     want(G.townDetail, z >= Z.townDetail);
     want(G.labNation, ui.labels);
     want(G.labRegion, ui.labels && z >= Z.regionLabel);
@@ -364,6 +504,5 @@
   // =====================================================================
   //  GO
   // =====================================================================
-  map.fitBounds(L.latLngBounds(LLs(WORLD.coastline)), { padding: [30, 30] });
   updateVisibility();
 })();
