@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=4" />
+  <title>The Shattered Concord — Map of Istraveth</title>
+  <meta name="description" content="A player-safe, zoomable map of Istraveth for the Shattered Concord campaign. Doubles as a D&D battle board." />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="map" role="application" aria-label="Map of Istraveth"></div>
+
+  <!-- Title plate -->
+  <div id="titleplate">
+    <h1>ISTRAVETH</h1>
+    <p>The Shattered Concord · <span class="safe">Player's Edition</span></p>
+  </div>
+
+  <!-- Control panel -->
+  <aside id="panel" class="open">
+    <button id="panel-toggle" aria-label="Toggle panel">☰</button>
+    <div class="panel-body">
+      <section>
+        <label class="sel-label" for="jump">Travel to…</label>
+        <select id="jump"><option value="">— choose a place —</option></select>
+      </section>
+
+      <section>
+        <h2>Layers</h2>
+        <label><input type="checkbox" id="t-labels" checked> Names &amp; labels</label>
+        <label><input type="checkbox" id="t-routes" checked> Roads &amp; rivers</label>
+        <label><input type="checkbox" id="t-front" checked> The Front</label>
+        <label><input type="checkbox" id="t-terrain" checked> Terrain detail</label>
+        <label><input type="checkbox" id="t-shading" checked> Realm shading</label>
+      </section>
+
+      <section>
+        <h2>Battle grid</h2>
+        <div class="seg" id="grid-seg">
+          <button data-grid="off" class="active">Off</button>
+          <button data-grid="square">Square</button>
+          <button data-grid="hex">Hex</button>
+        </div>
+        <p class="scale-read" id="scale-read">Zoom in for street level</p>
+      </section>
+
+      <section class="legend">
+        <h2>Legend</h2>
+        <ul>
+          <li><span class="k cap"></span> Capital</li>
+          <li><span class="k town"></span> Town / settlement</li>
+          <li><span class="k hidden"></span> Rumoured place</li>
+          <li><span class="k road"></span> Road</li>
+          <li><span class="k smug"></span> Smuggling route</li>
+          <li><span class="k river"></span> River</li>
+          <li><span class="k front"></span> The Front</li>
+        </ul>
+      </section>
+
+      <p class="footnote">Drawn only from what travellers know. Nothing here spoils the table.</p>
+    </div>
+  </aside>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="js/world-data.js"></script>
+  <script src="js/town-generator.js"></script>
+  <script src="js/map.js"></script>
+</body>
+</html>
