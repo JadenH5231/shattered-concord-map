@@ -92,6 +92,18 @@ body{
 .k.smug{height:0;border-top:3px dashed #7a5c3e}
 .k.river{height:0;border-top:3px solid #5d83a0}
 .k.front{height:0;border-top:3px dashed var(--rust)}
+/* building-type swatches (town legend) */
+.k.b-home{background:#d8c197;border:1px solid #9a7c52}
+.k.b-shop{background:#c79a5b;border:1px solid #7a5c3e}
+.k.b-tavern{background:#b1742f;border:1px solid #5f3c20}
+.k.b-temple{background:#ccd2c2;border:1px solid #69745d}
+.k.b-civic{background:#bb863c;border:1px solid #5a4226}
+.k.b-market{background:#cdb78d;border:1px solid #7a5c3e}
+.k.b-warehouse{background:#ad9e80;border:1px solid #6b5135}
+.k.b-forge{background:#8d7860;border:1px solid #2e2216}
+.town-legend ul{columns:2;column-gap:10px}
+.town-legend li{break-inside:avoid}
+.town-legend .hint{font-size:10px;font-style:italic;color:var(--ink-soft);margin:0 0 6px}
 .footnote{font-size:11px;font-style:italic;color:var(--ink-soft);margin:2px 0 0;line-height:1.4}
 
 /* ---- map labels (divIcons) ---- */
@@ -109,6 +121,11 @@ body{
 .lbl-hidden{font-style:italic;color:var(--ink-soft);opacity:.85}
 .lbl-landmark{font-size:10.5px;font-style:italic;font-weight:600;color:#5a4326;
   background:rgba(245,238,220,.6);padding:0 3px;border-radius:3px}
+.lbl-district{font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;font-weight:700;color:#6a4326;
+  background:rgba(245,238,220,.55);padding:0 3px;border-radius:3px}
+.lbl-water{font-style:italic;font-weight:600;letter-spacing:.12em;font-size:12px;color:#3f6b7a;
+  text-shadow:0 1px 2px rgba(245,238,220,.65),0 0 3px rgba(190,208,212,.9)}
+.lbl-water.sea{font-size:15px;letter-spacing:.32em;color:rgba(63,107,122,.62);text-indent:.32em;text-transform:uppercase}
 
 /* popups */
 .leaflet-popup-content-wrapper{

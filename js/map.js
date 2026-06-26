@@ -14,7 +14,7 @@
     terrain: 0,        // terrain texture (chevrons/trees/dots)
     front: -0.75,      // the front line
     regionDetail: 1.5, // trails, passes, dunes, craters
-    townDetail: 3,     // streets + buildings
+    townDetail: 2.8,   // streets + buildings
     landmark: 3.6      // landmark name labels
   };
 
@@ -34,11 +34,21 @@
     citadel:   { color: "#5a4226", weight: 2.8, fill: false },
     bastion:   { color: "#5a4226", weight: 2.4, fill: true, fillColor: "#b7b1a4", fillOpacity: 0.35 },
     palisade:  { color: "#7a5c3e", weight: 1.6, dashArray: "5 4", fill: false },
-    street:    { color: "#7c6647", weight: 2.2, fill: false },
-    lane:      { color: "#9a855f", weight: 1, fill: false },
-    building:  { color: "#7a5c3e", weight: 0.5, fill: true, fillColor: "#d4bd90", fillOpacity: 0.95 },
-    block:     { color: "#6b5135", weight: 0.7, fill: true, fillColor: "#bda480", fillOpacity: 0.95 },
-    hall:      { color: "#5a4226", weight: 1, fill: true, fillColor: "#b78a4e", fillOpacity: 0.95 },
+    street:    { color: "#7c6647", weight: 2.2, fill: false, lineCap: "round" },
+    lane:      { color: "#9a855f", weight: 1, fill: false, lineCap: "round" },
+    building:  { color: "#7a5c3e", weight: 0.5, fill: true, fillColor: "#d4bd90", fillOpacity: 1 },
+    block:     { color: "#6b5135", weight: 0.7, fill: true, fillColor: "#bda480", fillOpacity: 1 },
+    hall:      { color: "#5a4226", weight: 1, fill: true, fillColor: "#b78a4e", fillOpacity: 1 },
+    /* differentiated building types — a real city, legible by colour */
+    home:      { color: "#9a7c52", weight: 0.5, fill: true, fillColor: "#d8c197", fillOpacity: 1 },
+    shop:      { color: "#7a5c3e", weight: 0.6, fill: true, fillColor: "#c79a5b", fillOpacity: 1 },
+    tavern:    { color: "#5f3c20", weight: 0.7, fill: true, fillColor: "#b1742f", fillOpacity: 1 },
+    manor:     { color: "#7a5c3e", weight: 0.7, fill: true, fillColor: "#cdb785", fillOpacity: 1 },
+    temple:    { color: "#69745d", weight: 0.8, fill: true, fillColor: "#ccd2c2", fillOpacity: 1 },
+    civic:     { color: "#5a4226", weight: 1, fill: true, fillColor: "#bb863c", fillOpacity: 1 },
+    warehouse: { color: "#6b5135", weight: 0.7, fill: true, fillColor: "#ad9e80", fillOpacity: 1 },
+    forge:     { color: "#2e2216", weight: 0.8, fill: true, fillColor: "#8d7860", fillOpacity: 1 },
+    barracks:  { color: "#5a4226", weight: 0.8, fill: true, fillColor: "#a9a794", fillOpacity: 1 },
     plaza:     { color: "#a98f63", weight: 0.5, fill: true, fillColor: "#efe3c4", fillOpacity: 0.9 },
     field:     { color: "#8a9a5b", weight: 0.5, dashArray: "3 3", fill: true, fillColor: "#d8d09b", fillOpacity: 0.5 },
     trench:    { color: "#7a3b2a", weight: 1.8, dashArray: "6 4", fill: false },
@@ -65,7 +75,12 @@
     smokestack: { radius: 2.6, color: "#3a2c1d", fillColor: "#6b5135", weight: 1, fillOpacity: 1 },
     adit:       { radius: 3,   color: "#1f150d", fillColor: "#2c2014", weight: 1, fillOpacity: 1 },
     ship:       { radius: 2.6, color: "#5a4226", fillColor: "#9aa6a1", weight: 1, fillOpacity: 1 },
-    glade:      { radius: 2.8, color: "#5c7a3e", fillColor: "#9db184", weight: 1, fillOpacity: 1 }
+    glade:      { radius: 2.8, color: "#5c7a3e", fillColor: "#9db184", weight: 1, fillOpacity: 1 },
+    // small accents dropped on special buildings at street zoom
+    tavern:     { radius: 1.3, color: "#5f3c20", fillColor: "#9a3b27", weight: 0.6, fillOpacity: 1 },
+    temple:     { radius: 1.3, color: "#4f5a44", fillColor: "#eef1e8", weight: 0.6, fillOpacity: 1 },
+    civic:      { radius: 1.5, color: "#5a4226", fillColor: "#caa54f", weight: 0.8, fillOpacity: 1 },
+    forge:      { radius: 1.7, color: "#1f150d", fillColor: "#3a2c1d", weight: 0.6, fillOpacity: 1 }
   };
 
   // ---- helpers (declared early; function decls are hoisted) -------------
@@ -78,13 +93,54 @@
   function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
   function niceUnits(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw))); const f = raw / p; const m = f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10; return m * p; }
 
+  // ---- coastline smoothing (closed Catmull-Rom) -------------------------
+  // Turns the coarse control ring into a flowing, natural shoreline.
+  function smoothRing(pts, k) {
+    k = k || 10;
+    let p = pts.slice();
+    if (p.length > 1 && p[0][0] === p[p.length - 1][0] && p[0][1] === p[p.length - 1][1]) p.pop();
+    const n = p.length, out = [];
+    for (let i = 0; i < n; i++) {
+      const a = p[(i - 1 + n) % n], b = p[i], c = p[(i + 1) % n], d = p[(i + 2) % n];
+      for (let j = 0; j < k; j++) {
+        const t = j / k, t2 = t * t, t3 = t2 * t;
+        out.push([
+          0.5 * ((2 * b[0]) + (-a[0] + c[0]) * t + (2 * a[0] - 5 * b[0] + 4 * c[0] - d[0]) * t2 + (-a[0] + 3 * b[0] - 3 * c[0] + d[0]) * t3),
+          0.5 * ((2 * b[1]) + (-a[1] + c[1]) * t + (2 * a[1] - 5 * b[1] + 4 * c[1] - d[1]) * t2 + (-a[1] + 3 * b[1] - 3 * c[1] + d[1]) * t3)
+        ]);
+      }
+    }
+    out.push(out[0].slice());
+    return out;
+  }
+  function nearestIdx(ring, pt) { let bi = 0, bd = 1e18; for (let i = 0; i < ring.length; i++) { const dy = ring[i][0] - pt[0], dx = ring[i][1] - pt[1], d = dy * dy + dx * dx; if (d < bd) { bd = d; bi = i; } } return bi; }
+  function ringArc(ring, i, j) { const out = [], n = ring.length; let k = i; while (true) { out.push(ring[k]); if (k === j) break; k = (k + 1) % n; } return out; }
+  function avgX(poly) { let s = 0; for (const p of poly) s += p[1]; return s / poly.length; }
+
+  // Derive the two nations by splitting the coastline at the border spine's
+  // endpoints, so realm shading always meets the shore exactly.
+  function buildNationPolys() {
+    const coast = WORLD.coastline, spine = WORLD.borderSpine;
+    const i0 = nearestIdx(coast, spine[0]);                    // north split
+    const i1 = nearestIdx(coast, spine[spine.length - 1]);     // bay head
+    const arcA = ringArc(coast, i0, i1);
+    const arcB = ringArc(coast, i1, i0);
+    const spineFwd = spine.slice(1, -1);                       // interior only
+    const spineRev = spine.slice().reverse().slice(1, -1);
+    const polyA = arcA.concat(spineRev);
+    const polyB = arcB.concat(spineFwd);
+    const west = avgX(polyA) <= avgX(polyB) ? polyA : polyB;
+    const east = west === polyA ? polyB : polyA;
+    return { kalvann: smoothRing(west, 7), velgrath: smoothRing(east, 7) };
+  }
+
   // ---- map init ---------------------------------------------------------
   const canvasR = L.canvas({ padding: 0.6 });
   const map = L.map("map", {
     crs: L.CRS.Simple,
     minZoom: -2, maxZoom: 6,
     zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 90,
-    maxBounds: padBounds(WORLD.bounds, 240), maxBoundsViscosity: 0.7,
+    maxBounds: padBounds(WORLD.bounds, 520), maxBoundsViscosity: 0.7,
     renderer: canvasR
   });
   // Add the shared renderer to the map explicitly and first, so it's fully
@@ -109,7 +165,26 @@
   // mid-load (before the renderer is ready) and every path throws on its
   // first paint. Doing it here, before anything else exists to listen for
   // it, sidesteps the race entirely.
-  map.fitBounds(L.latLngBounds(LLs(WORLD.coastline)), { padding: [30, 30] });
+  // Pad the fit so the continent clears the control panel on the right and
+  // the title plate on top — otherwise the far-east capital sits hidden
+  // behind the panel on first load. Reserve the panel's real width, but only
+  // when there's enough room left for the map (else let the panel overlay
+  // and the player collapse it with the ☰ toggle).
+  function fitContinent() {
+    const b = L.latLngBounds(LLs(WORLD.coastline));
+    const panelEl = document.getElementById("panel");
+    const pw = panelEl ? panelEl.getBoundingClientRect().width : 0;
+    const size = map.getSize();
+    const roomy = size.x - pw > 420;
+    const padL = 20, padT = 84, padR = roomy ? Math.round(pw) + 26 : 22, padB = 28;
+    // pick a zoom that fits the land into the panel-free area, then place the
+    // land's centre at the centre of that area (fitBounds' own centring does
+    // not fully honour asymmetric padding once the zoom is snapped).
+    const z = map.getBoundsZoom(b, false, L.point(padL + padR, padT + padB));
+    map.setView(b.getCenter(), z, { animate: false });
+    map.panBy([(padR - padL) / 2, (padB - padT) / 2], { animate: false });
+  }
+  fitContinent();
   // The "whole continent" fit can land below zoom 0 on most screens — when
   // it does, pull the ambient LOD thresholds down with it so roads, rivers,
   // and terrain texture are visible on first load instead of only after
@@ -119,9 +194,12 @@
   Z.terrain = Math.min(Z.terrain, fitZ);
   Z.townLabel = Math.min(Z.townLabel, fitZ);
   Z.front = Math.min(Z.front, fitZ);
+  Z.regionLabel = Math.min(Z.regionLabel, fitZ);
 
-  // background sea fills the padded world
-  const seaBox = padBounds(WORLD.bounds, 240);
+  // background sea fills the padded world (wide enough to cover the pannable
+  // area, so the continent can be shifted clear of the panel without exposing
+  // any un-filled edge)
+  const seaBox = padBounds(WORLD.bounds, 560);
   L.rectangle([[seaBox[0][0], seaBox[0][1]], [seaBox[1][0], seaBox[1][1]]],
     Object.assign({ interactive: false, renderer: canvasR }, STYLE.sea)).addTo(map);
 
@@ -131,37 +209,41 @@
     terrain: L.layerGroup(), regionDetail: L.layerGroup(), routes: L.layerGroup(),
     front: L.layerGroup(), townDetail: L.layerGroup(), markers: L.layerGroup(),
     labNation: L.layerGroup(), labRegion: L.layerGroup(), labTown: L.layerGroup(),
-    labLandmark: L.layerGroup()
+    labLandmark: L.layerGroup(), labWater: L.layerGroup()
   };
 
-  // ---- base: land + coast ----------------------------------------------
-  L.polygon(LLs(WORLD.coastline), Object.assign({ interactive: false, renderer: canvasR }, STYLE.land)).addTo(G.land);
-  L.polygon(LLs(WORLD.nations.kalvann.polygon), Object.assign({ interactive: false, renderer: canvasR }, STYLE.kalvann)).addTo(G.nations);
-  L.polygon(LLs(WORLD.nations.velgrath.polygon), Object.assign({ interactive: false, renderer: canvasR }, STYLE.velgrath)).addTo(G.nations);
-  const spine = [[765, 500], [620, 505], [560, 498], [470, 510], [360, 500], [250, 495], [215, 485]];
-  L.polyline(LLs(spine), Object.assign({ interactive: false, renderer: canvasR }, STYLE.border)).addTo(G.nations);
-  L.polygon(LLs(WORLD.bay), Object.assign({ interactive: false, renderer: canvasR }, STYLE.bay)).addTo(G.land);
+  // ---- base: land + coast + nations + isles ----------------------------
+  // Smooth the control ring into a flowing coastline; reuse it for the land
+  // fill, the shoreline hachures, and the open-water tests.
+  const COAST = smoothRing(WORLD.coastline, 12);
+  L.polygon(LLs(COAST), Object.assign({ interactive: false, renderer: canvasR }, STYLE.land)).addTo(G.land);
+
+  const NAT = buildNationPolys();
+  L.polygon(LLs(NAT.kalvann), Object.assign({ interactive: false, renderer: canvasR }, STYLE.kalvann)).addTo(G.nations);
+  L.polygon(LLs(NAT.velgrath), Object.assign({ interactive: false, renderer: canvasR }, STYLE.velgrath)).addTo(G.nations);
+  L.polyline(LLs(WORLD.borderSpine), Object.assign({ interactive: false, renderer: canvasR }, STYLE.border)).addTo(G.nations);
+
+  // offshore isles — small smoothed landmasses scattered in the sea
+  (WORLD.islands || []).forEach(is => {
+    const r = mulberry32((is.seed || 1) * 131 + 7);
+    const ring = [];
+    const n = 9;
+    for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; const rr = is.r * (0.66 + r() * 0.5); ring.push([is.c[0] + Math.sin(a) * rr, is.c[1] + Math.cos(a) * rr]); }
+    L.polygon(LLs(smoothRing(ring, 8)), Object.assign({ interactive: false, renderer: canvasR }, STYLE.land, { weight: 1.5 })).addTo(G.land);
+  });
 
   // ---- coastal hachures: short ticks along the shore, pointing seaward --
   function addCoastalHachures() {
     const r = mulberry32(hash("coast") + 3);
-    const pts = WORLD.coastline;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      const len = dist(a, b);
-      if (len < 4) continue;
-      const d1 = (b[0] - a[0]) / len, d2 = (b[1] - a[1]) / len;
-      let n1 = -d2, n2 = d1;
-      const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      if (pip([mid[0] + n1 * 3, mid[1] + n2 * 3], WORLD.coastline)) { n1 = -n1; n2 = -n2; }
-      const steps = Math.max(1, Math.round(len / 14));
-      for (let s = 0; s <= steps; s++) {
-        const t = s / steps;
-        const p0 = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-        const tickLen = 2.6 + r() * 2.4;
-        const p1 = [p0[0] + n1 * tickLen, p0[1] + n2 * tickLen];
-        L.polyline(LLs([p0, p1]), { interactive: false, renderer: canvasR, color: "#5a4226", weight: 0.8, opacity: 0.38 }).addTo(G.land);
-      }
+    const pts = COAST, step = 5;
+    for (let i = 0; i + 1 < pts.length; i += step) {
+      const a = pts[i], b = pts[Math.min(pts.length - 1, i + 1)];
+      const len = dist(a, b) || 0.001;
+      let n1 = -(b[1] - a[1]) / len, n2 = (b[0] - a[0]) / len;     // shore normal
+      if (pip([a[0] + n1 * 3, a[1] + n2 * 3], COAST)) { n1 = -n1; n2 = -n2; } // point seaward
+      const tickLen = 2.4 + r() * 2.4;
+      const p1 = [a[0] + n1 * tickLen, a[1] + n2 * tickLen];
+      L.polyline(LLs([a, p1]), { interactive: false, renderer: canvasR, color: "#5a4226", weight: 0.8, opacity: 0.4 }).addTo(G.land);
     }
   }
   addCoastalHachures();
@@ -175,7 +257,7 @@
     while (placed < 150 && tries < 3000) {
       tries++;
       const p = [bb.minY + r() * bb.h, bb.minX + r() * bb.w];
-      if (pip(p, WORLD.coastline)) continue;
+      if (pip(p, COAST) || (WORLD.islands || []).some(is => dist(p, is.c) < is.r + 6)) continue;
       placed++;
       const len = 14 + r() * 16, ang = r() * Math.PI * 2, bow = 3 + r() * 3;
       const d1 = Math.sin(ang), d2 = Math.cos(ang), n1 = -d2, n2 = d1;
@@ -265,14 +347,14 @@
   // ---- generic countryside texture: the open land between named regions -
   function addOpenLandTexture() {
     const r = mulberry32(hash("openland") + 11);
-    const bb = bbox(WORLD.coastline);
+    const bb = bbox(COAST);
     const inRegion = (p) => WORLD.regions.some(rg => pip(p, rg.polygon));
     const nearTown = (p) => WORLD.settlements.some(s => dist(p, s.pos) < s.size * 1.6);
     let placed = 0, tries = 0;
-    while (placed < 650 && tries < 6000) {
+    while (placed < 720 && tries < 7000) {
       tries++;
       const p = [bb.minY + r() * bb.h, bb.minX + r() * bb.w];
-      if (!pip(p, WORLD.coastline) || inRegion(p) || nearTown(p)) continue;
+      if (!pip(p, COAST) || inRegion(p) || nearTown(p)) continue;
       placed++;
       const roll = r();
       if (roll < 0.62) hillTick(p, r);
@@ -298,6 +380,7 @@
     const det = TownGen.generateTown(s);
     det.markers = (det.markers || []).filter(m => {
       if (m.cls === "landmark") { addLandmarkLabel(m); return false; }
+      if (m.cls === "district") { addDistrictLabel(m); return false; }
       return true;
     });
     drawFeatures(det, G.townDetail);
@@ -329,6 +412,12 @@
     L.marker(LL(m.pos), {
       interactive: false, keyboard: false,
       icon: L.divIcon({ className: "", iconSize: [0, 0], html: '<div class="lbl lbl-landmark">' + esc(m.label) + '</div>' })
+    }).addTo(G.labLandmark);
+  }
+  function addDistrictLabel(m) {
+    L.marker(LL(m.pos), {
+      interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "", iconSize: [0, 0], html: '<div class="lbl lbl-district">' + esc(m.label) + '</div>' })
     }).addTo(G.labLandmark);
   }
 
@@ -365,6 +454,12 @@
     });
     mk.bindPopup('<p class="pop-title">' + esc(rg.name) + '</p><p class="pop-sub">Region</p><p>' + esc(rg.desc) + '</p>', { maxWidth: 260 });
     mk.addTo(G.labRegion);
+  });
+  (WORLD.waters || []).forEach(w => {
+    L.marker(LL(w.at), {
+      interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "", iconSize: [0, 0], html: '<div class="lbl lbl-water' + (w.size === "sea" ? " sea" : "") + '">' + esc(w.name) + '</div>' })
+    }).addTo(G.labWater);
   });
 
   function popupHTML(s) {
@@ -450,7 +545,8 @@
     want(G.routes, ui.routes && z >= Z.routes);
     want(G.front, ui.front && z >= Z.front);
     want(G.townDetail, z >= Z.townDetail);
-    want(G.labNation, ui.labels);
+    want(G.labNation, ui.labels && z <= 1.0);
+    want(G.labWater, ui.labels && z <= 1.6);
     want(G.labRegion, ui.labels && z >= Z.regionLabel);
     want(G.labLandmark, ui.labels && z >= Z.landmark);
     want(G.markers, true);
@@ -483,7 +579,13 @@
   jump.addEventListener("change", () => {
     const v = jump.value; if (!v) return;
     const parts = v.split(":"), t = parts[0], id = parts[1];
-    if (t === "s") { const s = WORLD.settlements.find(x => x.id === id); map.flyTo(LL(s.pos), 4.5, { duration: 0.8 }); }
+    if (t === "s") {
+      const s = WORLD.settlements.find(x => x.id === id);
+      // fit the zoom to the town's size so the whole place lands in frame
+      const avail = Math.max(320, map.getSize().x * 0.58);
+      const z = Math.max(Z.townDetail, Math.min(4.2, Math.log2(avail / (2.3 * s.size))));
+      map.flyTo(LL(s.pos), z, { duration: 0.8 });
+    }
     else { const rg = WORLD.regions.find(x => x.id === id); map.flyToBounds(L.latLngBounds(LLs(rg.polygon)), { padding: [40, 40], maxZoom: 2.5, duration: 0.8 }); }
     jump.value = "";
   });
